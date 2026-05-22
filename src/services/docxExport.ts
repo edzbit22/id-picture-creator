@@ -18,13 +18,21 @@ import { dataURLtoBase64 } from '@/utils/imageProcessing';
 import type { LayoutPosition } from '@/utils/paperLayout';
 
 /**
+ * Unit conversions for the docx library:
+ *
+ * The docx library uses DIFFERENT units for different properties:
+ * - PageSize, PageMargin, TableCell, TableRow → TWIPS (DXA): 1 inch = 1440 twips
+ * - ImageRun transformation → EMU: 1 inch = 914400 EMU
+ *
+ * Mixing these up causes Word to crash or produce wrong sizes.
+ */
+const INCH_TO_TWIPS = 1440;
+
+/**
  * Export ID pictures as a DOCX file with exact print dimensions.
  *
  * Uses a table-based layout so that each ID picture occupies a precise cell,
  * guaranteeing that the printed output matches the selected size exactly.
- *
- * Key conversion: 1 inch = 914400 EMU (English Metric Units)
- * At 300 DPI, a 2x2 inch image = 600x600 px → embedded and scaled to 1828800x1828800 EMU
  */
 export async function exportToDocx(
   imageDataURL: string,
@@ -36,22 +44,26 @@ export async function exportToDocx(
   const paper = PAPER_SIZES[paperSizeKey];
   const base64Data = dataURLtoBase64(imageDataURL);
 
-  // Page dimensions in EMU
-  const pageWidth = Math.round(paper.width * INCH_TO_EMU);
-  const pageHeight = Math.round(paper.height * INCH_TO_EMU);
+  // Page dimensions in TWIPS (for PageSize)
+  const pageWidth = Math.round(paper.width * INCH_TO_TWIPS);
+  const pageHeight = Math.round(paper.height * INCH_TO_TWIPS);
 
-  // Margins in EMU
-  const marginTop = Math.round(DEFAULT_MARGINS.top * INCH_TO_EMU);
-  const marginRight = Math.round(DEFAULT_MARGINS.right * INCH_TO_EMU);
-  const marginBottom = Math.round(DEFAULT_MARGINS.bottom * INCH_TO_EMU);
-  const marginLeft = Math.round(DEFAULT_MARGINS.left * INCH_TO_EMU);
+  // Margins in TWIPS (for PageMargin)
+  const marginTop = Math.round(DEFAULT_MARGINS.top * INCH_TO_TWIPS);
+  const marginRight = Math.round(DEFAULT_MARGINS.right * INCH_TO_TWIPS);
+  const marginBottom = Math.round(DEFAULT_MARGINS.bottom * INCH_TO_TWIPS);
+  const marginLeft = Math.round(DEFAULT_MARGINS.left * INCH_TO_TWIPS);
 
-  // Image dimensions in EMU
+  // Image dimensions in EMU (for ImageRun transformation)
   const imageWidthEMU = Math.round(pictureWidthInches * INCH_TO_EMU);
   const imageHeightEMU = Math.round(pictureHeightInches * INCH_TO_EMU);
 
-  // Gap in EMU
-  const gapEMU = Math.round(PICTURE_GAP * INCH_TO_EMU);
+  // Image dimensions in TWIPS (for TableCell and TableRow sizing)
+  const imageWidthTwips = Math.round(pictureWidthInches * INCH_TO_TWIPS);
+  const imageHeightTwips = Math.round(pictureHeightInches * INCH_TO_TWIPS);
+
+  // Gap in TWIPS
+  const gapTwips = Math.round(PICTURE_GAP * INCH_TO_TWIPS);
 
   // Group positions by row to determine grid structure
   const rowMap = new Map<number, LayoutPosition[]>();
@@ -67,7 +79,6 @@ export async function exportToDocx(
     rowPositions.sort((a, b) => a.colIndex - b.colIndex);
   }
 
-  const numRows = sortedRows.length;
   const numCols = sortedRows.length > 0 ? sortedRows[0][1].length : 0;
 
   // Build table rows
@@ -81,11 +92,11 @@ export async function exportToDocx(
       cells.push(
         new TableCell({
           width: {
-            size: imageWidthEMU,
+            size: imageWidthTwips,  // TWIPS for cell width
             type: WidthType.DXA,
           },
           height: {
-            value: imageHeightEMU,
+            value: imageHeightTwips,  // TWIPS for cell height
             rule: HeightRule.EXACT,
           },
           verticalAlign: VerticalAlign.CENTER,
@@ -109,8 +120,8 @@ export async function exportToDocx(
                 new ImageRun({
                   data: base64Data,
                   transformation: {
-                    width: imageWidthEMU,
-                    height: imageHeightEMU,
+                    width: imageWidthEMU,   // EMU for image display size
+                    height: imageHeightEMU,  // EMU for image display size
                   },
                   type: 'png',
                 }),
@@ -124,7 +135,7 @@ export async function exportToDocx(
     tableRows.push(
       new TableRow({
         height: {
-          value: imageHeightEMU,
+          value: imageHeightTwips,  // TWIPS for row height
           rule: HeightRule.EXACT,
         },
         children: cells,
@@ -132,8 +143,8 @@ export async function exportToDocx(
     );
   }
 
-  // Calculate total table width
-  const totalTableWidth = numCols * imageWidthEMU;
+  // Calculate total table width in TWIPS
+  const totalTableWidth = numCols * imageWidthTwips;
 
   const doc = new Document({
     sections: [
@@ -141,11 +152,11 @@ export async function exportToDocx(
         properties: {
           page: {
             size: {
-              width: pageWidth,
-              height: pageHeight,
+              width: pageWidth,    // TWIPS for page size
+              height: pageHeight,  // TWIPS for page size
             },
             margin: {
-              top: marginTop,
+              top: marginTop,      // TWIPS for margins
               right: marginRight,
               bottom: marginBottom,
               left: marginLeft,
@@ -155,11 +166,10 @@ export async function exportToDocx(
         children: [
           new Table({
             width: {
-              size: totalTableWidth,
+              size: totalTableWidth,  // TWIPS for table width
               type: WidthType.DXA,
             },
             rows: tableRows,
-            // No borders on the table
           }),
         ],
       },
